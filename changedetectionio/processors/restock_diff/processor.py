@@ -47,12 +47,12 @@ def _deduplicate_prices(data):
 
 # should return Restock()
 # add casting?
-def get_itemprop_availability(html_content) -> Restock:
+def get_itemprop_availability(html_content, product_filter="") -> Restock:
     """
     Kind of funny/cool way to find price/availability in one many different possibilities.
     Use 'extruct' to find any possible RDFa/microdata/json-ld data, make a JSON string from the output then search it.
     """
-    from jsonpath_ng import parse
+    from jsonpath_ng.ext import parse
 
     import re
     now = time.time()
@@ -75,9 +75,10 @@ def get_itemprop_availability(html_content) -> Restock:
     value = Restock()
     if data:
         logger.debug(f"Using jsonpath to find price/availability/etc")
-        price_parse = parse('$..(price|Price)')
-        pricecurrency_parse = parse('$..(pricecurrency|currency|priceCurrency )')
-        availability_parse = parse('$..(availability|Availability)')
+
+        price_parse = parse(''.join(['$', product_filter, '..(price|Price)']))
+        pricecurrency_parse = parse(''.join(['$', product_filter, '..(pricecurrency|currency|priceCurrency)']))
+        availability_parse = parse(''.join(['$', product_filter, '..(availability|Availability)']))
 
         price_result = _deduplicate_prices(price_parse.find(data))
         if price_result:
@@ -184,7 +185,7 @@ class perform_site_check(difference_detection_processor):
 
         itemprop_availability = {}
         try:
-            itemprop_availability = get_itemprop_availability(self.fetcher.content)
+            itemprop_availability = get_itemprop_availability(self.fetcher.content, restock_settings.get("product_filter"))
         except MoreThanOnePriceFound as e:
             # Add the real data
             raise ProcessorException(message="Cannot run, more than one price detected, this plugin is only for product pages with ONE product, try the content-change detection mode.",
