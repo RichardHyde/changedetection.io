@@ -476,7 +476,7 @@ class processor_text_json_diff_form(commonSettingsForm):
 
     title = StringField('Title', default='')
 
-    ignore_text = StringListField('Remove lines containing', [ValidateListRegex()])
+    ignore_text = StringListField('Ignore lines containing', [ValidateListRegex()])
     headers = StringDictKeyValue('Request headers')
     body = TextAreaField('Request body', [validators.Optional()])
     method = SelectField('Request method', choices=valid_method, default=default_method)
@@ -496,7 +496,7 @@ class processor_text_json_diff_form(commonSettingsForm):
     text_should_not_be_present = StringListField('Block change-detection while text matches', [validators.Optional(), ValidateListRegex()])
     webdriver_js_execute_code = TextAreaField('Execute JavaScript before change detection', render_kw={"rows": "5"}, validators=[validators.Optional()])
 
-    save_button = SubmitField('Save', render_kw={"class": "pure-button pure-button-primary"})
+    save_button = SubmitField('Save', render_kw={"class": "pure-button button-small pure-button-primary"})
 
     proxy = RadioField('Proxy')
     filter_failure_notification_send = BooleanField(
@@ -515,6 +515,7 @@ class processor_text_json_diff_form(commonSettingsForm):
         if not super().validate():
             return False
 
+        from changedetectionio.safe_jinja import render as jinja_render
         result = True
 
         # Fail form validation when a body is set for a GET
@@ -524,17 +525,45 @@ class processor_text_json_diff_form(commonSettingsForm):
 
         # Attempt to validate jinja2 templates in the URL
         try:
-            from changedetectionio.safe_jinja import render as jinja_render
             jinja_render(template_str=self.url.data)
         except ModuleNotFoundError as e:
             # incase jinja2_time or others is missing
             logger.error(e)
-            self.url.errors.append(e)
+            self.url.errors.append(f'Invalid template syntax configuration: {e}')
             result = False
         except Exception as e:
             logger.error(e)
-            self.url.errors.append('Invalid template syntax')
+            self.url.errors.append(f'Invalid template syntax: {e}')
             result = False
+
+        # Attempt to validate jinja2 templates in the body
+        if self.body.data and self.body.data.strip():
+            try:
+                jinja_render(template_str=self.body.data)
+            except ModuleNotFoundError as e:
+                # incase jinja2_time or others is missing
+                logger.error(e)
+                self.body.errors.append(f'Invalid template syntax configuration: {e}')
+                result = False
+            except Exception as e:
+                logger.error(e)
+                self.body.errors.append(f'Invalid template syntax: {e}')
+                result = False
+
+        # Attempt to validate jinja2 templates in the headers
+        if len(self.headers.data) > 0:
+            try:
+                for header, value in self.headers.data.items():
+                    jinja_render(template_str=value)
+            except ModuleNotFoundError as e:
+                # incase jinja2_time or others is missing
+                logger.error(e)
+                self.headers.errors.append(f'Invalid template syntax configuration: {e}')
+                result = False
+            except Exception as e:
+                logger.error(e)
+                self.headers.errors.append(f'Invalid template syntax in "{header}" header: {e}')
+                result = False
 
         return result
 
@@ -616,7 +645,7 @@ class globalSettingsForm(Form):
 
     requests = FormField(globalSettingsRequestForm)
     application = FormField(globalSettingsApplicationForm)
-    save_button = SubmitField('Save', render_kw={"class": "pure-button pure-button-primary"})
+    save_button = SubmitField('Save', render_kw={"class": "pure-button button-small pure-button-primary"})
 
 
 class extractDataForm(Form):

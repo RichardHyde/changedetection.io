@@ -18,6 +18,7 @@ class difference_detection_processor():
     screenshot = None
     watch = None
     xpath_data = None
+    preferred_proxy = None
 
     def __init__(self, *args, datastore, watch_uuid, **kwargs):
         super().__init__(*args, **kwargs)
@@ -26,23 +27,24 @@ class difference_detection_processor():
         # Generic fetcher that should be extended (requests, playwright etc)
         self.fetcher = Fetcher()
 
-    def call_browser(self):
+    def call_browser(self, preferred_proxy_id=None):
+
         from requests.structures import CaseInsensitiveDict
 
-        # Protect against file:// access
-        if re.search(r'^file://', self.watch.get('url', '').strip(), re.IGNORECASE):
+        url = self.watch.link
+
+        # Protect against file://, file:/ access, check the real "link" without any meta "source:" etc prepended.
+        if re.search(r'^file:/', url.strip(), re.IGNORECASE):
             if not strtobool(os.getenv('ALLOW_FILE_URI', 'false')):
                 raise Exception(
                     "file:// type access is denied for security reasons."
                 )
 
-        url = self.watch.link
-
         # Requests, playwright, other browser via wss:// etc, fetch_extra_something
         prefer_fetch_backend = self.watch.get('fetch_backend', 'system')
 
         # Proxy ID "key"
-        preferred_proxy_id = self.datastore.get_preferred_proxy_for_watch(uuid=self.watch.get('uuid'))
+        preferred_proxy_id = preferred_proxy_id if preferred_proxy_id else self.datastore.get_preferred_proxy_for_watch(uuid=self.watch.get('uuid'))
 
         # Pluggable content self.fetcher
         if not prefer_fetch_backend or prefer_fetch_backend == 'system':
@@ -100,6 +102,7 @@ class difference_detection_processor():
             self.fetcher.browser_steps_screenshot_path = os.path.join(self.datastore.datastore_path, self.watch.get('uuid'))
 
         # Tweak the base config with the per-watch ones
+        from changedetectionio.safe_jinja import render as jinja_render
         request_headers = CaseInsensitiveDict()
 
         ua = self.datastore.data['settings']['requests'].get('default_ua')
@@ -116,9 +119,15 @@ class difference_detection_processor():
         if 'Accept-Encoding' in request_headers and "br" in request_headers['Accept-Encoding']:
             request_headers['Accept-Encoding'] = request_headers['Accept-Encoding'].replace(', br', '')
 
+        for header_name in request_headers:
+            request_headers.update({header_name: jinja_render(template_str=request_headers.get(header_name))})
+
         timeout = self.datastore.data['settings']['requests'].get('timeout')
 
         request_body = self.watch.get('body')
+        if request_body:
+            request_body = jinja_render(template_str=self.watch.get('body'))
+        
         request_method = self.watch.get('method')
         ignore_status_codes = self.watch.get('ignore_status_codes', False)
 
@@ -155,7 +164,7 @@ class difference_detection_processor():
         # After init, call run_changedetection() which will do the actual change-detection
 
     @abstractmethod
-    def run_changedetection(self, watch, skip_when_checksum_same: bool = True):
+    def run_changedetection(self, watch):
         update_obj = {'last_notification_error': False, 'last_error': False}
         some_data = 'xxxxx'
         update_obj["previous_md5"] = hashlib.md5(some_data.encode('utf-8')).hexdigest()

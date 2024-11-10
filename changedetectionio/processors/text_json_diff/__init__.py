@@ -11,10 +11,7 @@ def _task(watch, update_handler):
 
     try:
         # The slow process (we run 2 of these in parallel)
-        changed_detected, update_obj, text_after_filter = update_handler.run_changedetection(
-            watch=watch,
-            skip_when_checksum_same=False,
-        )
+        changed_detected, update_obj, text_after_filter = update_handler.run_changedetection(watch=watch)
     except FilterNotFoundInResponse as e:
         text_after_filter = f"Filter not found in HTML: {str(e)}"
     except ReplyWithContentButNoText as e:
@@ -46,6 +43,9 @@ def prepare_filter_prevew(datastore, watch_uuid):
 
     text_after_filter = ''
     text_before_filter = ''
+    trigger_line_numbers = []
+    ignore_line_numbers = []
+
     tmp_watch = deepcopy(datastore.data['watching'].get(watch_uuid))
 
     if tmp_watch and tmp_watch.history and os.path.isdir(tmp_watch.watch_data_dir):
@@ -72,7 +72,7 @@ def prepare_filter_prevew(datastore, watch_uuid):
                                                                  )
             # Use the last loaded HTML as the input
             update_handler.datastore = datastore
-            update_handler.fetcher.content = decompressed_data
+            update_handler.fetcher.content = str(decompressed_data) # str() because playwright/puppeteer/requests return string
             update_handler.fetcher.headers['content-type'] = tmp_watch.get('content-type')
 
             # Process our watch with filters and the HTML from disk, and also a blank watch with no filters but also with the same HTML from disk
@@ -84,13 +84,20 @@ def prepare_filter_prevew(datastore, watch_uuid):
                 text_after_filter = future1.result()
                 text_before_filter = future2.result()
 
-    trigger_line_numbers = []
     try:
-
         trigger_line_numbers = html_tools.strip_ignore_text(content=text_after_filter,
                                                             wordlist=tmp_watch['trigger_text'],
                                                             mode='line numbers'
                                                             )
+    except Exception as e:
+        text_before_filter = f"Error: {str(e)}"
+
+    try:
+        text_to_ignore = tmp_watch.get('ignore_text', []) + datastore.data['settings']['application'].get('global_ignore_text', [])
+        ignore_line_numbers = html_tools.strip_ignore_text(content=text_after_filter,
+                                                           wordlist=text_to_ignore,
+                                                           mode='line numbers'
+                                                           )
     except Exception as e:
         text_before_filter = f"Error: {str(e)}"
 
@@ -102,6 +109,7 @@ def prepare_filter_prevew(datastore, watch_uuid):
             'before_filter': text_before_filter.decode('utf-8') if isinstance(text_before_filter, bytes) else text_before_filter,
             'duration': time.time() - now,
             'trigger_line_numbers': trigger_line_numbers,
+            'ignore_line_numbers': ignore_line_numbers,
         }
     )
 

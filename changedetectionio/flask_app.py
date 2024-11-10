@@ -53,6 +53,7 @@ extra_stylesheets = []
 
 update_q = queue.PriorityQueue()
 notification_q = queue.Queue()
+MAX_QUEUE_SIZE = 2000
 
 app = Flask(__name__,
             static_url_path="",
@@ -67,7 +68,6 @@ FlaskCompress(app)
 
 # Stop browser caching of assets
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
-
 app.config.exit = Event()
 
 app.config['NEW_VERSION_AVAILABLE'] = False
@@ -470,7 +470,7 @@ def changedetection_app(config=None, datastore_o=None):
                     continue
             if watch.get('last_error'):
                 errored_count += 1
-                
+
             if search_q:
                 if (watch.get('title') and search_q in watch.get('title').lower()) or search_q in watch.get('url', '').lower():
                     sorted_watches.append(watch)
@@ -533,24 +533,32 @@ def changedetection_app(config=None, datastore_o=None):
     @login_optionally_required
     def ajax_callback_send_notification_test(watch_uuid=None):
 
-        # Watch_uuid could be unset in the case its used in tag editor, global setings
+        # Watch_uuid could be unset in the case it`s used in tag editor, global settings
         import apprise
         import random
         from .apprise_asset import asset
         apobj = apprise.Apprise(asset=asset)
+
         # so that the custom endpoints are registered
         from changedetectionio.apprise_plugin import apprise_custom_api_call_wrapper
         is_global_settings_form = request.args.get('mode', '') == 'global-settings'
         is_group_settings_form = request.args.get('mode', '') == 'group-settings'
 
         # Use an existing random one on the global/main settings form
-        if not watch_uuid and (is_global_settings_form or is_group_settings_form):
+        if not watch_uuid and (is_global_settings_form or is_group_settings_form) \
+                and datastore.data.get('watching'):
             logger.debug(f"Send test notification - Choosing random Watch {watch_uuid}")
             watch_uuid = random.choice(list(datastore.data['watching'].keys()))
 
+        if not watch_uuid:
+            return make_response("Error: You must have atleast one watch configured for 'test notification' to work", 400)
+
         watch = datastore.data['watching'].get(watch_uuid)
 
-        notification_urls = request.form['notification_urls'].strip().splitlines()
+        notification_urls = None
+
+        if request.form.get('notification_urls'):
+            notification_urls = request.form['notification_urls'].strip().splitlines()
 
         if not notification_urls:
             logger.debug("Test notification - Trying by group/tag in the edit form if available")
@@ -568,12 +576,12 @@ def changedetection_app(config=None, datastore_o=None):
 
 
         if not notification_urls:
-            return 'No Notification URLs set/found'
+            return 'Error: No Notification URLs set/found'
 
         for n_url in notification_urls:
             if len(n_url.strip()):
                 if not apobj.add(n_url):
-                    return f'Error - {n_url} is not a valid AppRise URL.'
+                    return f'Error:  {n_url} is not a valid AppRise URL.'
 
         try:
             # use the same as when it is triggered, but then override it with the form test values
@@ -592,11 +600,13 @@ def changedetection_app(config=None, datastore_o=None):
             if 'notification_body' in request.form and request.form['notification_body'].strip():
                 n_object['notification_body'] = request.form.get('notification_body', '').strip()
 
+            n_object.update(watch.extra_notification_token_values())
+
             from . import update_worker
             new_worker = update_worker.update_worker(update_q, notification_q, app, datastore)
             new_worker.queue_notification_for_watch(notification_q=notification_q, n_object=n_object, watch=watch)
         except Exception as e:
-            return make_response({'error': str(e)}, 400)
+            return make_response(f"Error: str(e)", 400)
 
         return 'OK - Sent test notifications'
 
@@ -788,15 +798,15 @@ def changedetection_app(config=None, datastore_o=None):
             # Recast it if need be to right data Watch handler
             watch_class = get_custom_watch_obj_for_processor(form.data.get('processor'))
             datastore.data['watching'][uuid] = watch_class(datastore_path=datastore_o.datastore_path, default=datastore.data['watching'][uuid])
-
             flash("Updated watch - unpaused!" if request.args.get('unpause_on_save') else "Updated watch.")
 
             # Re #286 - We wait for syncing new data to disk in another thread every 60 seconds
             # But in the case something is added we should save straight away
             datastore.needs_write_urgent = True
 
-            # Queue the watch for immediate recheck, with a higher priority
-            update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid, 'skip_when_checksum_same': False}))
+            if not datastore.data['watching'][uuid].get('paused'):
+                # Queue the watch for immediate recheck, with a higher priority
+                update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid}))
 
             # Diff page [edit] link should go back to diff page
             if request.args.get("next") and request.args.get("next") == 'diff':
@@ -977,7 +987,7 @@ def changedetection_app(config=None, datastore_o=None):
                 importer = import_url_list()
                 importer.run(data=request.values.get('urls'), flash=flash, datastore=datastore, processor=request.values.get('processor', 'text_json_diff'))
                 for uuid in importer.new_uuids:
-                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid, 'skip_when_checksum_same': True}))
+                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid}))
 
                 if len(importer.remaining_data) == 0:
                     return redirect(url_for('index'))
@@ -990,7 +1000,7 @@ def changedetection_app(config=None, datastore_o=None):
                 d_importer = import_distill_io_json()
                 d_importer.run(data=request.values.get('distill-io'), flash=flash, datastore=datastore)
                 for uuid in d_importer.new_uuids:
-                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid, 'skip_when_checksum_same': True}))
+                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid}))
 
             # XLSX importer
             if request.files and request.files.get('xlsx_file'):
@@ -1014,7 +1024,7 @@ def changedetection_app(config=None, datastore_o=None):
                     w_importer.run(data=file, flash=flash, datastore=datastore)
 
                 for uuid in w_importer.new_uuids:
-                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid, 'skip_when_checksum_same': True}))
+                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid}))
 
         # Could be some remaining, or we could be on GET
         form = forms.importForm(formdata=request.form if request.method == 'POST' else None)
@@ -1227,78 +1237,6 @@ def changedetection_app(config=None, datastore_o=None):
 
         return output
 
-    # We're good but backups are even better!
-    @app.route("/backup", methods=['GET'])
-    @login_optionally_required
-    def get_backup():
-
-        import zipfile
-        from pathlib import Path
-
-        # Remove any existing backup file, for now we just keep one file
-
-        for previous_backup_filename in Path(datastore_o.datastore_path).rglob('changedetection-backup-*.zip'):
-            os.unlink(previous_backup_filename)
-
-        # create a ZipFile object
-        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        backupname = "changedetection-backup-{}.zip".format(timestamp)
-        backup_filepath = os.path.join(datastore_o.datastore_path, backupname)
-
-        with zipfile.ZipFile(backup_filepath, "w",
-                             compression=zipfile.ZIP_DEFLATED,
-                             compresslevel=8) as zipObj:
-
-            # Be sure we're written fresh
-            datastore.sync_to_json()
-
-            # Add the index
-            zipObj.write(os.path.join(datastore_o.datastore_path, "url-watches.json"), arcname="url-watches.json")
-
-            # Add the flask app secret
-            zipObj.write(os.path.join(datastore_o.datastore_path, "secret.txt"), arcname="secret.txt")
-
-            # Add any data in the watch data directory.
-            for uuid, w in datastore.data['watching'].items():
-                for f in Path(w.watch_data_dir).glob('*'):
-                    zipObj.write(f,
-                                 # Use the full path to access the file, but make the file 'relative' in the Zip.
-                                 arcname=os.path.join(f.parts[-2], f.parts[-1]),
-                                 compress_type=zipfile.ZIP_DEFLATED,
-                                 compresslevel=8)
-
-            # Create a list file with just the URLs, so it's easier to port somewhere else in the future
-            list_file = "url-list.txt"
-            with open(os.path.join(datastore_o.datastore_path, list_file), "w") as f:
-                for uuid in datastore.data["watching"]:
-                    url = datastore.data["watching"][uuid]["url"]
-                    f.write("{}\r\n".format(url))
-            list_with_tags_file = "url-list-with-tags.txt"
-            with open(
-                os.path.join(datastore_o.datastore_path, list_with_tags_file), "w"
-            ) as f:
-                for uuid in datastore.data["watching"]:
-                    url = datastore.data["watching"][uuid].get('url')
-                    tag = datastore.data["watching"][uuid].get('tags', {})
-                    f.write("{} {}\r\n".format(url, tag))
-
-            # Add it to the Zip
-            zipObj.write(
-                os.path.join(datastore_o.datastore_path, list_file),
-                arcname=list_file,
-                compress_type=zipfile.ZIP_DEFLATED,
-                compresslevel=8,
-            )
-            zipObj.write(
-                os.path.join(datastore_o.datastore_path, list_with_tags_file),
-                arcname=list_with_tags_file,
-                compress_type=zipfile.ZIP_DEFLATED,
-                compresslevel=8,
-            )
-
-        # Send_from_directory needs to be the full absolute path
-        return send_from_directory(os.path.abspath(datastore_o.datastore_path), backupname, as_attachment=True)
-
     @app.route("/static/<string:group>/<string:filename>", methods=['GET'])
     def static_content(group, filename):
         from flask import make_response
@@ -1397,7 +1335,7 @@ def changedetection_app(config=None, datastore_o=None):
         url = request.form.get('url').strip()
         if datastore.url_exists(url):
             flash(f'Warning, URL {url} already exists', "notice")
-            
+
         add_paused = request.form.get('edit_and_watch_submit_button') != None
         processor = request.form.get('processor', 'text_json_diff')
         new_uuid = datastore.add_watch(url=url, tag=request.form.get('tags').strip(), extras={'paused': add_paused, 'processor': processor})
@@ -1443,7 +1381,7 @@ def changedetection_app(config=None, datastore_o=None):
         new_uuid = datastore.clone(uuid)
         if new_uuid:
             if not datastore.data['watching'].get(uuid).get('paused'):
-                update_q.put(queuedWatchMetaData.PrioritizedItem(priority=5, item={'uuid': new_uuid, 'skip_when_checksum_same': True}))
+                update_q.put(queuedWatchMetaData.PrioritizedItem(priority=5, item={'uuid': new_uuid}))
             flash('Cloned.')
 
         return redirect(url_for('index'))
@@ -1464,7 +1402,7 @@ def changedetection_app(config=None, datastore_o=None):
 
         if uuid:
             if uuid not in running_uuids:
-                update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid, 'skip_when_checksum_same': False}))
+                update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid}))
             i = 1
 
         elif tag:
@@ -1475,7 +1413,7 @@ def changedetection_app(config=None, datastore_o=None):
                         continue
                     if watch_uuid not in running_uuids and not datastore.data['watching'][watch_uuid]['paused']:
                         update_q.put(
-                            queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': watch_uuid, 'skip_when_checksum_same': False})
+                            queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': watch_uuid})
                         )
                         i += 1
 
@@ -1485,9 +1423,8 @@ def changedetection_app(config=None, datastore_o=None):
                 if watch_uuid not in running_uuids and not datastore.data['watching'][watch_uuid]['paused']:
                     if with_errors and not watch.get('last_error'):
                         continue
-                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': watch_uuid, 'skip_when_checksum_same': False}))
+                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': watch_uuid}))
                     i += 1
-
         flash(f"{i} watches queued for rechecking.")
         return redirect(url_for('index', tag=tag))
 
@@ -1544,7 +1481,7 @@ def changedetection_app(config=None, datastore_o=None):
                 uuid = uuid.strip()
                 if datastore.data['watching'].get(uuid):
                     # Recheck and require a full reprocessing
-                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid, 'skip_when_checksum_same': False}))
+                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=1, item={'uuid': uuid}))
             flash("{} watches queued for rechecking".format(len(uuids)))
 
         elif (op == 'clear-errors'):
@@ -1679,6 +1616,9 @@ def changedetection_app(config=None, datastore_o=None):
     import changedetectionio.blueprint.check_proxies as check_proxies
     app.register_blueprint(check_proxies.construct_blueprint(datastore=datastore), url_prefix='/check_proxy')
 
+    import changedetectionio.blueprint.backups as backups
+    app.register_blueprint(backups.construct_blueprint(datastore), url_prefix='/backups')
+
 
     # @todo handle ctrl break
     ticker_thread = threading.Thread(target=ticker_thread_check_time_launch_checks).start()
@@ -1803,12 +1743,14 @@ def ticker_thread_check_time_launch_checks():
             except RuntimeError as e:
                 # RuntimeError: dictionary changed size during iteration
                 time.sleep(0.1)
+                watch_uuid_list = []
             else:
                 break
 
         # Re #438 - Don't place more watches in the queue to be checked if the queue is already large
         while update_q.qsize() >= 2000:
-            time.sleep(1)
+            logger.warning(f"Recheck watches queue size limit reached ({MAX_QUEUE_SIZE}), skipping adding more items")
+            time.sleep(3)
 
 
         recheck_time_system_seconds = int(datastore.threshold_seconds)
@@ -1868,7 +1810,7 @@ def ticker_thread_check_time_launch_checks():
                         f"{now - watch['last_checked']:0.2f}s since last checked")
 
                     # Into the queue with you
-                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=priority, item={'uuid': uuid, 'skip_when_checksum_same': True}))
+                    update_q.put(queuedWatchMetaData.PrioritizedItem(priority=priority, item={'uuid': uuid}))
 
                     # Reset for next time
                     watch.jitter_seconds = 0

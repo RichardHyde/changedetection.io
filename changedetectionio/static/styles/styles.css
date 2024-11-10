@@ -112,26 +112,34 @@ ul#requests-extra_proxies {
   ul#requests-extra_proxies li > label {
     display: none; }
   ul#requests-extra_proxies table tr {
-    display: inline; }
+    display: table-row; }
+    ul#requests-extra_proxies table tr input[type=text] {
+      width: 100%; }
+  @media only screen and (min-width: 1024px) {
+    ul#requests-extra_proxies table tr {
+      display: inline; } }
 
 #request {
   /* Auto proxy scan/checker */ }
   #request label[for=proxy] {
     display: inline-block; }
 
-body.proxy-check-active #request .proxy-status {
-  width: 2em; }
-
-body.proxy-check-active #request .proxy-check-details {
-  font-size: 80%;
-  color: #555;
-  display: block;
-  padding-left: 4em; }
-
-body.proxy-check-active #request .proxy-timing {
-  font-size: 80%;
-  padding-left: 1rem;
-  color: var(--color-link); }
+body.proxy-check-active #request {
+  /*
+    .proxy-status {
+      width: 2em;
+    }
+    */ }
+  body.proxy-check-active #request .proxy-check-details {
+    font-size: 80%;
+    color: #555;
+    display: block;
+    padding-left: 2em;
+    max-width: 500px; }
+  body.proxy-check-active #request .proxy-timing {
+    font-size: 80%;
+    padding-left: 1rem;
+    color: var(--color-link); }
 
 #recommended-proxy {
   display: grid;
@@ -158,7 +166,14 @@ ul#requests-extra_browsers {
   ul#requests-extra_browsers li > label {
     display: none; }
   ul#requests-extra_browsers table tr {
-    display: inline; }
+    display: table-row; }
+    ul#requests-extra_browsers table tr input[type=text] {
+      width: 100%; }
+  @media only screen and (min-width: 1280px) {
+    ul#requests-extra_browsers table tr {
+      display: inline; }
+      ul#requests-extra_browsers table tr input[type=text] {
+        width: 100%; } }
 
 #extra-browsers-setting {
   border: 1px solid var(--color-grey-800);
@@ -602,8 +617,11 @@ body.spinner-active #pure-menu-horizontal-spinner {
     background-color: var(--color-background-menu-link-hover);
     color: var(--color-text-menu-link-hover); }
 
+.tab-pane-inner {
+  scroll-margin-top: 200px; }
+
 section.content {
-  padding-top: 5em;
+  padding-top: 100px;
   padding-bottom: 1em;
   flex-direction: column;
   display: flex;
