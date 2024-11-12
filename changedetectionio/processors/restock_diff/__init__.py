@@ -34,7 +34,8 @@ class Restock(dict):
             'in_stock': None,
             'price': None,
             'currency': None,
-            'original_price': None
+            'original_price': None,
+            'lowest_price': None
         }
 
         # Initialize the dictionary with default values
@@ -49,7 +50,7 @@ class Restock(dict):
 
     def __setitem__(self, key, value):
         # Custom logic to handle setting price and original_price
-        if key == 'price' or key == 'original_price':
+        if key == 'price' or key == 'original_price' or key == 'lowest_price':
             if isinstance(value, str):
                 value = self.parse_currency(raw_value=value)
 
