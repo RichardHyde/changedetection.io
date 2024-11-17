@@ -160,7 +160,10 @@ class perform_site_check(difference_detection_processor):
         # Track the content type
         update_obj['content_type'] = self.fetcher.headers.get('Content-Type', '')
         update_obj["last_check_status"] = self.fetcher.get_last_status_code()
-
+        
+        # Copy the lowest_price from the watch
+        update_obj["restock"]["lowest_price"] = watch["restock"]["lowest_price"] if watch["restock"]["lowest_price"] else None
+        
         # Only try to process restock information (like scraping for keywords) if the page was actually rendered correctly.
         # Otherwise it will assume "in stock" because nothing suggesting the opposite was found
         from ...html_tools import html_to_text
@@ -174,10 +177,10 @@ class perform_site_check(difference_detection_processor):
                                             html_content=self.fetcher.content,
                                             xpath_data=self.fetcher.xpath_data
                                             )
-
+        
         # Which restock settings to compare against?
         restock_settings = watch.get('restock_settings', {})
-
+        
         # See if any tags have 'activate for individual watches in this tag/group?' enabled and use the first we find
         for tag_uuid in watch.get('tags'):
             tag = self.datastore.data['settings']['application']['tags'].get(tag_uuid, {})
@@ -217,14 +220,24 @@ class perform_site_check(difference_detection_processor):
                 else:
                     update_obj['restock']['in_stock'] = False
 
+        # Copy the lowest_price from the watch
+        update_obj["restock"]["lowest_price"] = watch["restock"]["lowest_price"] if watch["restock"]["lowest_price"] else None
+
         # Main detection method
         fetched_md5 = None
-
-        # store original price if not set
-        if itemprop_availability and itemprop_availability.get('price') and not itemprop_availability.get('original_price'):
-            itemprop_availability['original_price'] = itemprop_availability.get('price')
-            update_obj['restock']["original_price"] = itemprop_availability.get('price')
-
+        
+        # Update the original and/or lowest price if a price is available
+        if itemprop_availability and itemprop_availability.get('price'):
+          # store original price if not set
+            if not itemprop_availability.get('original_price'):
+                itemprop_availability['original_price'] = itemprop_availability.get('price')
+                update_obj['restock']["original_price"] = itemprop_availability.get('price')
+            
+            # update the lowest price if not set or new price is lower
+            if not watch['restock']['lowest_price'] or float(itemprop_availability.get('price')) < watch['restock']['lowest_price']:
+                logger.debug(f"Watch UUID {watch.get('uuid')} new lowest price {itemprop_availability.get('price')}")
+                update_obj['restock']['lowest_price'] = itemprop_availability.get('price')
+                
         if not self.fetcher.instock_data and not itemprop_availability.get('availability') and not itemprop_availability.get('price'):
             raise ProcessorException(
                 message=f"Unable to extract restock data for this page unfortunately. (Got code {self.fetcher.get_last_status_code()} from server), no embedded stock information was found and nothing interesting in the text, try using this watch with Chrome.",
@@ -283,8 +296,9 @@ class perform_site_check(difference_detection_processor):
             # Minimum/maximum price limit
             if update_obj.get('restock') and update_obj['restock'].get('price'):
                 logger.debug(
-                    f"{watch.get('uuid')} - Change was detected, 'price_change_max' is '{restock_settings.get('price_change_max', '')}' 'price_change_min' is '{restock_settings.get('price_change_min', '')}', price from website is '{update_obj['restock'].get('price', '')}'.")
+                    f"{watch.get('uuid')} - Change was detected, 'price_change_max' is '{restock_settings.get('price_change_max', '')}' 'price_change_min' is '{restock_settings.get('price_change_min', '')}', 'lowest_price' is '{watch['restock'].get('lowest_price', '')}', price from website is '{update_obj['restock'].get('price', '')}'.")
                 if update_obj['restock'].get('price'):
+                    lowest_price = float(watch['restock'].get('lowest_price')) if watch['restock'].get('lowest_price') else None
                     min_limit = float(restock_settings.get('price_change_min')) if restock_settings.get('price_change_min') else None
                     max_limit = float(restock_settings.get('price_change_max')) if restock_settings.get('price_change_max') else None
 
@@ -309,6 +323,11 @@ class perform_site_check(difference_detection_processor):
                         else:
                             logger.debug(f"{watch.get('uuid')} Price change was {change:.3f}% , (threshold {pc}%)")
 
+                    # Check if lowest price
+                    if restock_settings.get('lowest_price_only') and changed_detected and lowest_price and price > lowest_price:
+                        logger.debug(f"{watch.get('uuid')} Override change-detected to FALSE because price ({price}) was higher than lowest price ({lowest_price})")
+                        changed_detected = False
+                            
         # Always record the new checksum
         update_obj["previous_md5"] = fetched_md5
 
