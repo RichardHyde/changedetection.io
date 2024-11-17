@@ -30,6 +30,8 @@ class RestockSettingsForm(Form):
 
     follow_price_changes = BooleanField('Follow price changes', default=True)
 
+    lowest_price_only = BooleanField('Notification on lowest price only', default=False)
+
     product_filter = StringField('Product Filter', validators=[validators.Optional()])
 
 class processor_settings_form(processor_text_json_diff_form):
@@ -64,6 +66,10 @@ class processor_settings_form(processor_text_json_diff_form):
                 <fieldset class="pure-group">
                     {{ render_checkbox_field(form.restock_settings.follow_price_changes) }}
                     <span class="pure-form-message-inline">Changes in price should trigger a notification</span>
+                </fieldset>
+                <fieldset class="pure-group">
+                    {{ render_checkbox_field(form.restock_settings.lowest_price_only) }}
+                    <span class="pure-form-message-inline">Trigger a notification only when the lowest price is reached</span>
                 </fieldset>
                 <fieldset class="pure-group price-change-minmax">               
                     {{ render_field(form.restock_settings.price_change_min, placeholder=watch.get('restock', {}).get('price')) }}
