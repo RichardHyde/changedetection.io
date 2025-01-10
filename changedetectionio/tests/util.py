@@ -76,6 +76,14 @@ def set_more_modified_response():
     return None
 
 
+def set_empty_text_response():
+    test_return_data = """<html><body></body></html>"""
+
+    with open("test-datastore/endpoint-content.txt", "w") as f:
+        f.write(test_return_data)
+
+    return None
+
 def wait_for_notification_endpoint_output():
     '''Apprise can take a few seconds to fire'''
     #@todo - could check the apprise object directly instead of looking for this file
@@ -215,9 +223,10 @@ def live_server_setup(live_server):
     def test_method():
         return request.method
 
-    # Where we POST to as a notification
-    @live_server.app.route('/test_notification_endpoint', methods=['POST', 'GET'])
+    # Where we POST to as a notification, also use a space here to test URL escaping is OK across all tests that use this. ( #2868 )
+    @live_server.app.route('/test_notification endpoint', methods=['POST', 'GET'])
     def test_notification_endpoint():
+
         with open("test-datastore/notification.txt", "wb") as f:
             # Debug method, dump all POST to file also, used to prove #65
             data = request.stream.read()
