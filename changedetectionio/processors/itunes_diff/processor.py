@@ -393,10 +393,13 @@ class perform_site_check(difference_detection_processor):
         changed_detected = False
         logger.debug(f"Watch UUID {watch.get('uuid')} restock check - Previous MD5: {watch.get('previous_md5')}, Fetched MD5 {fetched_md5}")
 
+        is_in_stock = update_obj['restock'].get('in_stock') if update_obj['restock'].get('in_stock') else False
+        was_in_stock = watch['restock'].get('in_stock') if watch['restock'].get('in_stock') else False
+        
         # out of stock -> back in stock only?
-        if watch.get('restock') and watch['restock'].get('in_stock') != update_obj['restock'].get('in_stock'):
+        if watch.get('restock') and was_in_stock != is_in_stock:
             # Yes if we only care about it going to instock, AND we are in stock
-            if itunes_settings.get('in_stock_processing') == 'in_stock_only' and update_obj['restock']['in_stock']:
+            if itunes_settings.get('in_stock_processing') == 'in_stock_only' and is_in_stock:
                 changed_detected = True
 
             if itunes_settings.get('in_stock_processing') == 'all_changes':
